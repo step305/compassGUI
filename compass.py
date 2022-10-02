@@ -52,9 +52,8 @@ next_event.clear()
 
 azimuth = np.NAN
 
-adc_sum = 0
-yaw_sum = 0
-cnt_sum = 0
+adc_sum = []
+yaw_sum = []
 
 
 def get_pid(name):
@@ -97,7 +96,6 @@ def draw_data(canvas, f_plot, panel, data):
     global azimuth
     global yaw_sum
     global adc_sum
-    global cnt_sum
     global plot_x
     global plot_y
 
@@ -108,7 +106,12 @@ def draw_data(canvas, f_plot, panel, data):
         slam_data, frame = pack
 
         if not slam_data is None:
-            azi_val = '...' if np.isnan(azimuth) else '{:0.2f}'.format(slam_data['yaw'] - azimuth)
+            azi = (slam_data['yaw'] + azimuth) % 360.0
+            if azi > 180:
+                azi = azi - 360
+            elif azi < -180:
+                azi = azi + 360
+            azi_val = '...' if np.isnan(azimuth) else '{:0.2f}'.format(azi)
             lbl_val = '\nEuler angles [deg]:\n{:0.1f},\t{:0.1f},\t{:0.1f}' \
                       '\nAzimuth [deg]:\n{:}' \
                       '\nBias [dph]:\n{:0.1f},\t{:0.1f},\t{:0.1f}'.format(slam_data['yaw'],
@@ -121,17 +124,17 @@ def draw_data(canvas, f_plot, panel, data):
             lbl_text.set(lbl_val)
             if next_event.is_set():
                 if time.time() < t_start_accumuate + config.POINT_CARUSELING_DURATION:
-                    yaw_sum += slam_data['yaw']
-                    adc_sum += slam_data['adc']
-                    cnt_sum += 1
+                    yaw_sum.append(slam_data['yaw'])
+                    adc_sum.append(slam_data['adc'])
                 else:
-                    plot_x.append(yaw_sum / cnt_sum)
-                    plot_y.append(adc_sum / cnt_sum)
+                    yaw_point = np.unwrap(np.array(yaw_sum) / 180.0 * np.pi).mean() / np.pi * 180.0
+                    adc_point = np.array(adc_sum).mean()
+                    plot_x.append(yaw_point)
+                    plot_y.append(adc_point)
                     print(plot_x)
                     print(plot_y)
-                    adc_sum = 0
-                    yaw_sum = 0
-                    cnt_sum = 0
+                    adc_sum = []
+                    yaw_sum = []
                     next_event.clear()
                     next_button['state'] = tkinter.NORMAL
                     f_plot.clear()
@@ -146,6 +149,8 @@ def draw_data(canvas, f_plot, panel, data):
                             y = np.array(plot_y)
                             popt, pcov = curve_fit(fit_f, x, y, p0=(0.0, 10.2, 0))
                             azimuth = popt[2]
+                            if popt[1] < 0:
+                                azimuth += 180
                             xf = np.linspace(np.min(x), np.max(x), 100)
                             yf = fit_f(xf, popt[0], popt[1], popt[2])
                             if polar_view.get() == 1:
@@ -153,7 +158,7 @@ def draw_data(canvas, f_plot, panel, data):
                                 f_plot.polar(phi, ro, 'b*')
                             else:
                                 f_plot.plot(xf, yf, 'b-')
-                            f_plot.legend(['azimuth = ', '{:0.2f}deg'.format(azimuth)])
+                            f_plot.legend(['phase = ', '{:0.2f}deg'.format(azimuth)])
                         except Exception as e:
                             print('Invalid arccos', e)
         config_plot_style(f_plot)
@@ -191,9 +196,9 @@ def data_source(stop, queue):
     FIFO = FIFO_PATH
     cnt = 0
     max_cnt = 10
-    heading_sum = 0
-    roll_sum = 0
-    pitch_sum = 0
+    heading_sum = []
+    roll_sum = []
+    pitch_sum = []
     bw_sum = [0, 0, 0]
     sw_sum = [0, 0, 0]
     crh_sum = 0
@@ -209,27 +214,26 @@ def data_source(stop, queue):
                     try:
                         packet = json.loads(line)
                         if cnt == max_cnt:
-                            earth_meas = [heading_sum / cnt, crh_sum / cnt]
-                            package = {'yaw': heading_sum / cnt,
-                                       'pitch': pitch_sum / cnt,
-                                       'roll': roll_sum / cnt,
+                            package = {'yaw': np.unwrap(np.array(heading_sum) /180.0 * np.pi).mean() / np.pi * 180.0,
+                                       'pitch': np.unwrap(np.array(pitch_sum) /180.0 * np.pi).mean() / np.pi * 180.0,
+                                       'roll': np.unwrap(np.array(roll_sum) /180.0 * np.pi).mean() / np.pi * 180.0,
                                        'bw': [i / cnt for i in bw_sum],
                                        'sw': [i / cnt for i in sw_sum],
                                        'adc': crh_sum / cnt
                                        }
                             if not queue.full():
                                 queue.put((package, None))
-                            heading_sum = 0
-                            roll_sum = 0
-                            pitch_sum = 0
+                            heading_sum = []
+                            roll_sum = []
+                            pitch_sum = []
                             bw_sum = [0, 0, 0]
                             crh_sum = 0
                             cnt = 0
                         else:
                             cnt = cnt + 1
-                            heading_sum += packet['yaw']
-                            roll_sum += packet['roll']
-                            pitch_sum += packet['pitch']
+                            heading_sum.append(packet['yaw'])
+                            roll_sum.append(packet['roll'])
+                            pitch_sum.append(packet['pitch'])
                             bw_sum = [x + y for x, y in zip(bw_sum, packet['bw'])]
                             sw_sum = [x + y for x, y in zip(sw_sum, packet['sw'])]
                             crh_sum += packet['adc']
